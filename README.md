@@ -1,89 +1,147 @@
 # holo.cpp
 
-**Fast, verifiable inference of content-addressed models — on your machine.**
+**You cannot tell if the AI model on your disk has been tampered with. You cannot prove an
+answer came from the model you think produced it. holo.cpp fixes both, for free.**
 
-The compute engine is [`qvac-fabric-llm.cpp`](https://github.com/tetherto/qvac-fabric-llm.cpp)
-(Tether's fork of [`llama.cpp`](https://github.com/ggml-org/llama.cpp)), consumed unmodified
-as a pinned submodule. holo.cpp contributes what no inference engine ships:
+A model file today is just bytes from the internet. Change one bit of it and every popular
+inference engine will load it and answer cheerfully, telling you nothing. An answer today
+is just text. Nothing ties it to the exact model, program and settings that produced it.
+Anyone who cares about supply chain integrity, reproducible results, or paying untrusted
+machines to run inference has this problem. An answer you cannot check is an answer you are
+merely trusting.
 
-- **Content-addressed models.** A model is named by its bytes (`holo:b3:<hash>` — a BLAKE3
-  content address). Whatever you type — a Hugging Face id, a file path, an alias — the tool
-  prints the address it resolved to before the first token.
-- **Verified streaming.** Models stream over one HTTP GET; every 8 MB block is
-  BLAKE3-verified **before** the engine sees a byte, load overlaps the wire, and a tampered
-  block is refused loudly, by name. Origin failover resumes from the verified high-water.
-- **Receipts on every answer.** Each run seals `model address ‖ engine hash ‖ input ids ‖
-  output ids ‖ sampler+seed` — real bytes, content-addressed by its own hash.
-  `holo verify <address>` re-derives the answer token-for-token or names the first
-  divergence. A forged receipt is refuted by the compute, not the paperwork.
+## How it works
 
-**Measured** (see [bench/RESULTS.md](bench/RESULTS.md); 835 MB BitNet TQ2_0, CPU, matched
-configs, interleaved runs, harness in-repo): greedy output **character-identical** to
-`llama-completion`; decode speed a statistical tie (17.6 vs 16.9 tok/s median, overlapping
-spreads — same kernels, so verification costs **zero per token**); verified load costs
-~560 ms once on 835 MB; a single flipped bit anywhere in the model is refused by name with
-zero tokens emitted (the engine loads the same tampered file without complaint); and on a
-validated 50 MB/s wire the verified streaming path finishes **~0.6 s sooner** than the
-engine's own unverified download-then-load. Ties, losses and exclusions are reported in the
-same tables.
+Three ideas, each simple on its own:
 
-## The 90-second demo
+1. **A model is named by its bytes.** The name is a content address: a BLAKE3 hash derived
+   from the file itself. Whatever you type (a Hugging Face id, a file path, a short alias),
+   holo prints the address it resolved before the first token appears.
+2. **Every block is checked before it is decoded.** Models stream in 8 MB blocks and each
+   block must match its hash before the engine sees a single byte. A tampered block is
+   refused by name. Checking overlaps the download, so on a network link it costs nothing.
+3. **Every answer is sealed and replayable.** Each run writes a receipt: model address,
+   engine binary hash, exact input and output tokens, sampler and seed. `holo verify`
+   re-runs the computation and either matches token for token or names the first
+   divergence. A forged receipt is refuted by compute, not paperwork.
+
+The compute engine underneath is
+[qvac-fabric-llm.cpp](https://github.com/tetherto/qvac-fabric-llm.cpp) (Tether's fork of
+[llama.cpp](https://github.com/ggml-org/llama.cpp)), vendored unmodified as a pinned
+submodule. holo adds the loader, the verifier and the receipts through the engine's own
+public API, with zero patches. Same kernels, same speed, same answers.
+
+## See it in 15 seconds
 
 ```bash
 bash demo.sh
 ```
 
-Three acts, nothing mocked, every act asserts its own outcome: flip one bit in an 835 MB
-model — the engine answers happily, holo refuses naming the block; forge a receipt — replay
-refutes it at the exact token; then the stopwatch — verification cost nothing. Transcript
-and the per-act comparison against zkML / TEE / TOPLOC: [docs/DEMO.md](docs/DEMO.md).
+Three acts. Nothing is mocked, every act checks its own outcome, and the script exits
+nonzero if reality disagrees with the story. Measured on 2026-08-24; full transcript and
+methodology in [docs/DEMO.md](docs/DEMO.md).
 
-## Use
+**Act I. Flip one bit in an 835 MB model.**
+
+| engine | result |
+|---|---|
+| llama.cpp family, no verification | answered normally, said nothing |
+| holo | `block 47/100 FAILED verification (expected b3:9d42caec…, got b3:2da844c4…)`, zero tokens, exit 1 |
+
+**Act II. Forge a receipt (one output token changed, correctly self addressed).**
+
+| receipt | result |
+|---|---|
+| genuine | `VERIFIED: re-derived byte-identical` |
+| forged | `REFUSED: re-derivation diverged at output position 2 (got 278, sealed 279)` |
+
+**Act III. What did the protection cost?**
+
+| metric | holo (verified) | engine (unverified) |
+|---|---:|---:|
+| decode speed, this demo run | 21.2 tok/s | 21.6 tok/s |
+| decode speed, 8 run median | 17.6 tok/s | 16.9 tok/s |
+| output | identical | identical |
+
+Whole demo: 15 seconds on a warm store.
+
+## The numbers
+
+Measured 2026-08-24 on an AMD Ryzen AI Max 390 (12 cores, 32 GB, Windows 11), CPU backend,
+model BitNet 1.3B ternary (834,553,152 bytes). Full method, raw logs and every tie or loss
+in [bench/RESULTS.md](bench/RESULTS.md); harness in `bench/stress.sh`, rerun it yourself.
+
+**Speed: verification is free per token.**
+
+| | holo | engine alone |
+|---|---:|---:|
+| decode, median of 8 interleaved runs | **17.6 tok/s** | 16.9 tok/s |
+| output parity, greedy, matched settings | identical | identical |
+
+**Load: verification costs about half a second, once.**
+
+| | median | spread |
+|---|---:|---|
+| engine mmap load, no checks | 307 ms | 295 to 334 ms |
+| holo verified load, all 100 blocks checked | 865 ms | 854 to 944 ms |
+
+**Cold start from a URL: the verified path finishes ahead of the naive one.**
+Controlled 50 MB/s wire, every run validated, 4 runs each:
+
+| | median time to done | verified? |
+|---|---:|---|
+| holo streaming (checks ride inside the download) | **16.4 s** | every block |
+| download, then load | 17.0 s | nothing |
+
+**Tamper detection: 5 of 5 positions refused.** First byte, header, midpoint, deep
+interior, final byte. Each one bit flip was refused by block name with both hashes shown,
+zero tokens emitted, exit 1. The unmodified engine loaded every one of those files without
+complaint.
+
+## Use it
 
 ```
-holo pull hf:owner/repo/model.gguf     # acquire + verify + store; prints holo:b3:<address>
-holo run  <address|alias|hf:|path>     # verified load, generate, seal a receipt
-holo verify <receipt-address>          # re-derive; byte-identical or loud failure
-holo-server <ref> --port 8000          # OpenAI-compatible API; x-holo-receipt on answers
-holo-cli -m model.gguf -p "..." -n 32  # llama.cpp-compatible flags, drop-in argv
+holo pull hf:owner/repo/model.gguf     acquire, verify, store; prints holo:b3:<address>
+holo run  <address|alias|hf:|path>     verified load, generate, seal a receipt
+holo verify <receipt-address>          re-derive; byte identical or loud failure
+holo-server <ref> --port 8000          OpenAI compatible API; x-holo-receipt on answers
+holo-cli -m model.gguf -p "..." -n 32  llama.cpp compatible flags, drop in argv
 ```
 
-Any GGUF runs unmodified — your existing files work as-is. An unmodified OpenAI SDK works
-against `holo-server` with only a base-URL change.
+Any GGUF runs unmodified. An unmodified OpenAI SDK works against `holo-server` with only a
+base URL change.
 
 ## Build
 
 ```bash
 git clone --recurse-submodules https://github.com/humuhumu33/holo.cpp
 cd holo.cpp
-bash build.sh          # builds the engine (CMake) then the holo tools (g++)
+bash build.sh
 ```
 
-Windows/MinGW note: the engine needs `-D_WIN32_WINNT=0x0A00` (handled by build.sh). A
-prebuilt Windows bundle with runtime DLLs included is attached to the GitHub release.
+Windows with MinGW needs `-D_WIN32_WINNT=0x0A00`, which build.sh handles. A prebuilt
+Windows bundle with runtime DLLs is attached to the GitHub release.
 
 ## Repository
 
 ```
-engine/     qvac-fabric-llm.cpp, pinned submodule — the compute engine, unmodified
-src/        holo_stream.h — the verified streaming loader (~230 lines)
+engine/     qvac-fabric-llm.cpp, pinned submodule, unmodified compute engine
+src/        holo_stream.h, the verified streaming loader (about 230 lines)
 tools/      holo-cli, holo-server, holo-pack, probe-futures
-bench/      harness + published results, raw logs included
-docs/       PHASE-0..5 — every phase gate with its evidence
+bench/      harness plus published results, raw logs included
+docs/       DEMO.md and PHASE-0 through PHASE-5, every claim with its evidence
+demo.sh     the three act demo, self asserting
 ```
-
-The integration point is the engine's own public API —
-`llama_model_load_from_split_futures` fed by a custom `std::streambuf` over the verified
-arrived-prefix. **Zero patches to the engine.**
 
 ## Honesty rules
 
-Every performance claim in this repo names its regime, ships its harness, and reports the
-configurations where the comparator wins. Numbers are dated and expire. What is not yet
-demonstrated (GPU legs, cross-machine replay, serving concurrency) is listed in
-[docs/PHASE-5.md](docs/PHASE-5.md), not implied.
+Every performance claim names its regime, ships its harness, and reports where the
+comparator wins or ties. What is not yet demonstrated is listed, not implied: no GPU legs,
+no cross machine replay yet (designed and specified, awaiting a second machine), no serving
+concurrency, and receipts require the verifier to hold the model. Numbers are dated and
+expire.
 
 ## License
 
-MIT. This project would not exist without `llama.cpp` and `qvac-fabric-llm.cpp` — the
-engine keeps its identity, its license, and the credit for every token per second.
+MIT. This project would not exist without llama.cpp and qvac-fabric-llm.cpp. The engine
+keeps its identity, its license, and the credit for every token per second.
