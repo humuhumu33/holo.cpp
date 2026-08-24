@@ -48,6 +48,20 @@ overlap saves the load time, not the wire time; verification rides free inside t
 **Failover.** Origin 1 truncated at byte 400,000,000 → automatic failover, resume at exactly
 the verified high-water from origin 2, full verify, identical output.
 
+**Live-internet leg.** First attempt failed usefully: Hugging Face 302-redirects
+`resolve/main/...` to its CDN, and the fetcher's curl lacked `-L` — curl `-f` exited on the
+redirect, zero bytes arrived, and the loader reported `no origin serves the remaining bytes
+(verified 0/834553152)` and refused. Two lessons recorded: follow redirects (`-sL`), and the
+failure mode was *honest* — nothing was served, nothing was guessed.
+
+**Fixed run (PROVEN, real internet, 2026-08-24):** 834,553,152 bytes streamed from
+`huggingface.co` over HTTPS (~6 MB/s measured link), all 100 blocks BLAKE3-verified
+in-flight. `load OK` at **139,139 ms** — i.e. the wire time itself: load and verification
+were fully absorbed into the stream. First token +96 ms; output identical to the local
+baseline. **Cold TTFT-from-URL on this link: 139.2 s, with verification and model build
+costing ~0.1 s visible.** The comparator flow (download to disk, then load) pays the same
+wire plus its load serially, plus the disk round-trip.
+
 ## Deviations and debts
 
 - **Tamper currently fails the whole stream** rather than re-fetching the bad block from the

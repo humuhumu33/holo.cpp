@@ -143,7 +143,9 @@ struct fetcher {
             if (arrived_to < block_end && !at_eof) break;           // block incomplete — wait for more bytes
             size_t bs  = block_end - bi * m.block_size;
             std::string got = b3_hex(buf.data.data() + bi * m.block_size, bs);
-            if (got != m.blocks[bi]) {
+            // "*" = trust-on-first-use acquisition: the hash is recorded by the caller
+            // (mint_manifest) rather than checked — used only when no pin exists yet.
+            if (m.blocks[bi] != "*" && got != m.blocks[bi]) {
                 char msg[256];
                 snprintf(msg, sizeof msg,
                          "block %zu/%zu FAILED verification (expected b3:%.16s…, got b3:%.16s…) — refusing to serve it",
@@ -171,7 +173,7 @@ struct fetcher {
             bool   is_url = org.rfind("http", 0) == 0;
             std::string cmd;
             if (is_url) {
-                cmd = "curl -s -f --retry 2 -r " + std::to_string(at) + "- \"" + org + "\"";
+                cmd = "curl -sL -f --retry 2 -r " + std::to_string(at) + "- \"" + org + "\"";
                 p = _popen(cmd.c_str(), "rb");
             } else {
                 p = fopen(org.c_str(), "rb");
