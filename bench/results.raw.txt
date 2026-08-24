@@ -1,0 +1,28 @@
+## machine: AMD Ryzen AI Max 390, 12C/24T, 32GB, Windows 11, CPU backend, -march=native
+## engine: qvac-fabric-llm.cpp @ 4919828 | model: bitnet_b1_58-xl-TQ2_0.gguf (834553152 B)
+## date: 2026-08-24T10:57Z | greedy temp=0 unless stated | 3 runs where marked
+
+== parity (greedy, 32 tokens)
+
+== single-stream warm (n=64 greedy, -t 12), 3 runs each
+llama-completion run1: load_ms=280.85 prompt_tps=106.57 decode_tps=21.39
+llama-completion run2: load_ms=302.57 prompt_tps=109.73 decode_tps=23.13
+llama-completion run3: load_ms=277.14 prompt_tps=114.57 decode_tps=22.94
+holo run1: load_verify_ms=853.4 ttft_after_load_ms=60.6 decode_tps=35.12 n=64
+holo run2: load_verify_ms=855.8 ttft_after_load_ms=63.1 decode_tps=35.01 n=64
+holo run3: load_verify_ms=872.0 ttft_after_load_ms=65.3 decode_tps=35.32 n=64
+
+== verify_replay (8-token receipt), 3 runs
+verify run1: wall_ms=2828 rc=0 VERIFIED: re-derived byte-identical — 
+verify run2: wall_ms=2828 rc=0 VERIFIED: re-derived byte-identical — 
+verify run3: wall_ms=2891 rc=0 VERIFIED: re-derived byte-identical — 
+
+== cold-start, localhost origin throttled to 50 MB/s (both sides see the same wire)
+holo stream run1: ttft_from_url_ms=16098.8 total_ms=16468 (verified in-flight)
+holo stream run2: ttft_from_url_ms=16074.8 total_ms=16453 (verified in-flight)
+holo stream run3: ttft_from_url_ms=16091.1 total_ms=16500 (verified in-flight)
+download-then-load run1: download_ms=16031 load_ms=275.23 prompt_ms=62.31 ttft_from_url_ms=16368.5 total_ms=16968 (NO verification)
+download-then-load run2: download_ms=16047 load_ms=266.05 prompt_ms=54.65 ttft_from_url_ms=16367.7 total_ms=16938 (NO verification)
+download-then-load run3: download_ms=16031 load_ms=292.32 prompt_ms=56.72 ttft_from_url_ms=16380.0 total_ms=16922 (NO verification)
+
+## real-internet datapoint (2026-08-24, ~6 MB/s HF link): holo ttft_from_url = 139235 ms, verification+load ~0.1 s visible over wire time (docs/PHASE-1.md)

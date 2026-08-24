@@ -259,6 +259,7 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
     fulfiller.join(); fx.join();
     if (!model) { fprintf(stderr, "REFUSED: model not loaded\n"); return 1; }
     fprintf(stderr, "[%8.1fms] load OK — %zu/%zu bytes verified\n", ms(), vb.verified.load(), m.size);
+    { std::vector<uint8_t>().swap(vb.data); }   // weights are engine-resident now — drop the 835MB staging buffer
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
     llama_context_params cp = llama_context_default_params(); cp.n_ctx = sc.n_ctx > 0 ? sc.n_ctx : 512;
@@ -279,8 +280,11 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
     std::vector<int> in_ids(toks, toks + n), out_ids;
     llama_batch b = llama_batch_get_one(toks, n);
     llama_decode(lctx, b);
+    fprintf(stderr, "[%8.1fms] prompt evaluated (%d tokens)\n", ms(), n);
+    bool first = true;
     for (int i = 0; i < n_gen; i++) {
         llama_token best = llama_sampler_sample(smpl, lctx, -1);
+        if (first) { fprintf(stderr, "[%8.1fms] first token\n", ms()); first = false; }
         if (llama_vocab_is_eog(vocab, best)) break;
         char piece[64];
         int pn = llama_token_to_piece(vocab, best, piece, sizeof piece, 0, false);
@@ -354,6 +358,7 @@ static int cmd_verify(const std::string & ref) {
     llama_model * model = llama_model_load_from_split_futures(paths, 1, ctx_tag, tpath.c_str(), mp);
     fulfiller.join(); fx.join();
     if (!model) { fprintf(stderr, "REFUSED: model failed verification — cannot replay\n"); return 1; }
+    { std::vector<uint8_t>().swap(vb.data); }   // drop the staging buffer before replay
 
     llama_context_params cp = llama_context_default_params();
     std::string nctx = str_field(j, "n_ctx");
