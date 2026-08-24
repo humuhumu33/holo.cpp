@@ -1,116 +1,112 @@
 # holo.cpp
 
-**You cannot tell if the AI model on your disk has been tampered with. You cannot prove an
-answer came from the model you think produced it. holo.cpp fixes both, for free.**
+### Verified local AI inference. Same speed, same answers, now provable.
 
-A model file today is just bytes from the internet. Change one bit of it and every popular
-inference engine will load it and answer cheerfully, telling you nothing. An answer today
-is just text. Nothing ties it to the exact model, program and settings that produced it.
-Anyone who cares about supply chain integrity, reproducible results, or paying untrusted
-machines to run inference has this problem. An answer you cannot check is an answer you are
-merely trusting.
+Flip one bit in a model file and every popular engine will load it and answer anyway,
+telling you nothing. Ask a rented machine to run a model and nothing ties its answer to the
+model you paid for. holo.cpp closes both gaps, and the benchmarks say it costs you nothing.
+
+```bash
+bash demo.sh        # the whole argument in 15 seconds, on your machine
+```
+
+Everything below was measured on 2026-08-24 (AMD Ryzen AI Max 390, CPU, one machine). Every
+number ships with the script that produced it. Nothing here is a mock.
+
+## The evidence, in three lines
+
+| claim | holo | the engine alone |
+|---|---|---|
+| one bit flipped in an 835 MB model | **refused, named the block, zero tokens** | ran it, answered normally, said nothing |
+| a forged answer receipt | **refused, named the exact wrong token** | no such concept |
+| decode speed (8 run median, same model) | **17.6 tok/s** | 16.9 tok/s |
+
+The protection is free because the compute engine underneath *is*
+[qvac-fabric-llm.cpp](https://github.com/tetherto/qvac-fabric-llm.cpp) (Tether's fork of
+[llama.cpp](https://github.com/ggml-org/llama.cpp)), vendored unmodified. holo adds a
+verifying loader and re-derivable receipts through the engine's own public API, zero
+patches. Same kernels, same output, plus proof.
+
+## Why it matters, with real examples
+
+**Supply chain. A model reaches you through mirrors nobody vouches for.**
+`demo-usecases.sh` pulls the exact Llama 3.2 model [QVAC](https://github.com/tetherto/qvac)
+ships in its quickstart and shows two independent naming systems agree on the bytes:
+
+```
+QVAC registry sha256 : 66bfbb2d…70c2      (trust in their catalog)
+holo content address : holo:b3:5da836c9…  (trust in nothing but the file)
+✔ the bytes we pulled from Hugging Face ARE the bytes Tether pinned
+```
+
+**Silent corruption and poisoned weights.** Disk rot, a bad flush, or a surgically edited
+"sleeper" model all look identical to a normal load. Flip one bit and:
+
+```
+[the engine every local AI app uses today]   loaded it, answered, warned you of nothing
+[holo]  block 47/93 FAILED verification (expected b3:66db5a54…, got b3:f61e8f4a…) — refused, 0 tokens
+```
+
+**Trustless and paid inference.** Pay a peer to run your prompt; the answer comes with a
+receipt binding model, engine and every token. A genuine answer re-derives byte for byte; a
+fabricated one is caught at the token it was faked:
+
+```
+✔ VERIFIED: re-derived byte-identical — the peer really ran this model on your prompt
+✘ REFUSED: re-derivation diverged at output position 1 — the cheat, located exactly
+```
+
+That last line is the difference between suspicion and slashing evidence. Full walkthroughs:
+[docs/USE-CASES.md](docs/USE-CASES.md).
 
 ## How it works
 
-Three ideas, each simple on its own:
+Three ideas, each simple:
 
-1. **A model is named by its bytes.** The name is a content address: a BLAKE3 hash derived
-   from the file itself. Whatever you type (a Hugging Face id, a file path, a short alias),
-   holo prints the address it resolved before the first token appears.
-2. **Every block is checked before it is decoded.** Models stream in 8 MB blocks and each
-   block must match its hash before the engine sees a single byte. A tampered block is
-   refused by name. Checking overlaps the download, so on a network link it costs nothing.
-3. **Every answer is sealed and replayable.** Each run writes a receipt: model address,
-   engine binary hash, exact input and output tokens, sampler and seed. `holo verify`
-   re-runs the computation and either matches token for token or names the first
-   divergence. A forged receipt is refuted by compute, not paperwork.
+1. **A model is named by its bytes**, a BLAKE3 content address. Type a Hugging Face id, a
+   file path, or an alias; holo prints the address it resolved before the first token.
+2. **Every 8 MB block is checked before it is decoded.** A tampered block is refused by name.
+   Checking overlaps the download, so streaming from a URL it costs nothing.
+3. **Every answer is sealed and replayable.** The receipt binds model address, engine binary
+   hash, exact input and output tokens, sampler and seed. `holo verify` re-runs the compute
+   and matches token for token or names the first divergence. A forgery is refuted by
+   compute, not paperwork.
 
-The compute engine underneath is
-[qvac-fabric-llm.cpp](https://github.com/tetherto/qvac-fabric-llm.cpp) (Tether's fork of
-[llama.cpp](https://github.com/ggml-org/llama.cpp)), vendored unmodified as a pinned
-submodule. holo adds the loader, the verifier and the receipts through the engine's own
-public API, with zero patches. Same kernels, same speed, same answers.
+## How it compares
 
-## See it in 15 seconds
+Five approaches call themselves verified inference; they solve different problems. Sources
+and dates in [docs/COMPARISON.md](docs/COMPARISON.md).
 
-```bash
-bash demo.sh
-```
+| | catches poisoned weights before decode | proves the exact answer | overhead per token | runs on a laptop CPU | trust you must add |
+|---|:---:|:---:|:---:|:---:|---|
+| **holo.cpp** | **yes** | **yes, exact token** | **none (measured tie)** | **yes** | none; you hold the model |
+| zkML (DeepProve) | no | yes, but ~GPT-2 scale is the frontier | ~1000×+ at LLM scale | no | none (math) |
+| TEE (H100 CC) | no (attests the binary, not your file) | attests where code ran, not the answer | ~4 to 8% | no (needs H100) | the hardware vendor's root |
+| TOPLOC | no (checks activations while serving) | probabilistic, not exact | small | no (GPU validator) | statistical tolerance |
 
-Three acts. Nothing is mocked, every act checks its own outcome, and the script exits
-nonzero if reality disagrees with the story. Measured on 2026-08-24; full transcript and
-methodology in [docs/DEMO.md](docs/DEMO.md).
+Read it plainly: zkML wins the one thing holo cannot do (verify **without** the model, on
+chain); TEEs win privacy and near native speed if you trust NVIDIA and own an H100; TOPLOC
+screens ~100× cheaper than replay but never gives you an exact "diverged at token 1". holo
+owns the corner none of them target: **exact, zero overhead, on the machine you already
+have.** Its honest cost is that the verifier must hold the model, and cross machine replay
+is designed but not yet demonstrated.
 
-**Act I. Flip one bit in an 835 MB model.**
+## The full numbers
 
-| engine | result |
-|---|---|
-| llama.cpp family, no verification | answered normally, said nothing |
-| holo | `block 47/100 FAILED verification (expected b3:9d42caec…, got b3:2da844c4…)`, zero tokens, exit 1 |
+CPU, one machine, BitNet 1.3B ternary (834,553,152 bytes). Method, raw logs and every tie
+or loss in [bench/RESULTS.md](bench/RESULTS.md); rerun with `bench/stress.sh`.
 
-**Act II. Forge a receipt (one output token changed, correctly self addressed).**
-
-| receipt | result |
-|---|---|
-| genuine | `VERIFIED: re-derived byte-identical` |
-| forged | `REFUSED: re-derivation diverged at output position 2 (got 278, sealed 279)` |
-
-**Act III. What did the protection cost?**
-
-| metric | holo (verified) | engine (unverified) |
-|---|---:|---:|
-| decode speed, this demo run | 21.2 tok/s | 21.6 tok/s |
-| decode speed, 8 run median | 17.6 tok/s | 16.9 tok/s |
-| output | identical | identical |
-
-Whole demo: 15 seconds on a warm store.
-
-## Practical use cases
-
-`bash demo-usecases.sh` tells three stories on the exact Llama 3.2 model that
-[QVAC](https://github.com/tetherto/qvac) (Tether's local AI SDK) ships in its quickstart:
-
-1. **Supply chain.** The bytes we pull from Hugging Face match, independently, the sha256
-   QVAC pinned in its registry. Two naming systems, one file, agreement you can check.
-2. **Silent corruption.** Flip one bit in the model cache: the usual engine runs it and says
-   nothing, holo refuses by block name before the first token.
-3. **Trustless inference.** A peer runs your prompt and returns a receipt; a genuine answer
-   re-derives byte for byte, a fabricated one is caught at the exact token.
-
-Full transcript and the use cases behind each: [docs/USE-CASES.md](docs/USE-CASES.md).
-
-## The numbers
-
-Measured 2026-08-24 on an AMD Ryzen AI Max 390 (12 cores, 32 GB, Windows 11), CPU backend,
-model BitNet 1.3B ternary (834,553,152 bytes). Full method, raw logs and every tie or loss
-in [bench/RESULTS.md](bench/RESULTS.md); harness in `bench/stress.sh`, rerun it yourself.
-
-**Speed: verification is free per token.**
-
-| | holo | engine alone |
+| measurement | holo | engine alone |
 |---|---:|---:|
 | decode, median of 8 interleaved runs | **17.6 tok/s** | 16.9 tok/s |
-| output parity, greedy, matched settings | identical | identical |
+| greedy output, matched settings | identical | identical |
+| load, no verification (mmap) | | 307 ms |
+| load, all 100 blocks verified | 865 ms | |
+| cold start from a 50 MB/s URL, to done | **16.4 s, verified** | 17.0 s, unverified |
+| tamper positions refused (first, header, mid, deep, last) | **5 of 5** | 0 of 5 |
 
-**Load: verification costs about half a second, once.**
-
-| | median | spread |
-|---|---:|---|
-| engine mmap load, no checks | 307 ms | 295 to 334 ms |
-| holo verified load, all 100 blocks checked | 865 ms | 854 to 944 ms |
-
-**Cold start from a URL: the verified path finishes ahead of the naive one.**
-Controlled 50 MB/s wire, every run validated, 4 runs each:
-
-| | median time to done | verified? |
-|---|---:|---|
-| holo streaming (checks ride inside the download) | **16.4 s** | every block |
-| download, then load | 17.0 s | nothing |
-
-**Tamper detection: 5 of 5 positions refused.** First byte, header, midpoint, deep
-interior, final byte. Each one bit flip was refused by block name with both hashes shown,
-zero tokens emitted, exit 1. The unmodified engine loaded every one of those files without
-complaint.
+Verification adds about half a second once at load and nothing per token. Streaming from a
+URL it rides inside the download, so the verified path finishes ahead of the naive one.
 
 ## Use it
 
@@ -133,27 +129,16 @@ cd holo.cpp
 bash build.sh
 ```
 
-Windows with MinGW needs `-D_WIN32_WINNT=0x0A00`, which build.sh handles. A prebuilt
-Windows bundle with runtime DLLs is attached to the GitHub release.
+Windows with MinGW needs `-D_WIN32_WINNT=0x0A00`, which build.sh handles. A prebuilt Windows
+bundle with runtime DLLs is attached to the GitHub release.
 
-## Repository
-
-```
-engine/     qvac-fabric-llm.cpp, pinned submodule, unmodified compute engine
-src/        holo_stream.h, the verified streaming loader (about 230 lines)
-tools/      holo-cli, holo-server, holo-pack, probe-futures
-bench/      harness plus published results, raw logs included
-docs/       DEMO.md and PHASE-0 through PHASE-5, every claim with its evidence
-demo.sh     the three act demo, self asserting
-```
-
-## Honesty rules
+## What is proven, and what is not
 
 Every performance claim names its regime, ships its harness, and reports where the
-comparator wins or ties. What is not yet demonstrated is listed, not implied: no GPU legs,
-no cross machine replay yet (designed and specified, awaiting a second machine), no serving
-concurrency, and receipts require the verifier to hold the model. Numbers are dated and
-expire.
+comparator ties or wins. Not yet demonstrated, and not implied: GPU backends, cross machine
+replay (designed and specified, awaiting a second machine), serving concurrency. Receipts
+require the verifier to hold the model. One known bug: some llama family GGUFs crash in the
+streaming loader after load, tracked in the issues. Numbers are dated and expire.
 
 ## License
 
