@@ -27,6 +27,17 @@ validated 50 MB/s wire the verified streaming path finishes **~0.6 s sooner** th
 engine's own unverified download-then-load. Ties, losses and exclusions are reported in the
 same tables.
 
+## The 90-second demo
+
+```bash
+bash demo.sh
+```
+
+Three acts, nothing mocked, every act asserts its own outcome: flip one bit in an 835 MB
+model — the engine answers happily, holo refuses naming the block; forge a receipt — replay
+refutes it at the exact token; then the stopwatch — verification cost nothing. Transcript
+and the per-act comparison against zkML / TEE / TOPLOC: [docs/DEMO.md](docs/DEMO.md).
+
 ## Use
 
 ```
