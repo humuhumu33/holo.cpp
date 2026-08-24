@@ -231,7 +231,9 @@ static resolved resolve(const std::string & ref) {
 }
 
 // ── run ─────────────────────────────────────────────────────────────────────────
-static int cmd_run(const resolved & r, const std::string & prompt, int n_gen) {
+struct sample_cfg { float temp = 0.0f; int top_k = 40; float top_p = 1.0f; float rep = 1.0f; uint32_t seed = 0; int n_threads = 0; int n_ctx = 512; };
+
+static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, const sample_cfg & sc = {}) {
     std::string root = store_root();
     holo::manifest m = holo::manifest::parse_file(root + "/manifests/" + r.b3 + ".json");
     fprintf(stderr, "[%8.1fms] resolved  holo:b3:%.16s…  (%zu bytes, warm)\n", ms(), r.b3.c_str(), m.size);
@@ -259,17 +261,27 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen) {
     fprintf(stderr, "[%8.1fms] load OK — %zu/%zu bytes verified\n", ms(), vb.verified.load(), m.size);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    llama_context_params cp = llama_context_default_params(); cp.n_ctx = 512;
+    llama_context_params cp = llama_context_default_params(); cp.n_ctx = sc.n_ctx > 0 ? sc.n_ctx : 512;
+    if (sc.n_threads > 0) { cp.n_threads = sc.n_threads; cp.n_threads_batch = sc.n_threads; }
     llama_context * lctx = llama_init_from_model(model, cp);
+    // sampler chain: greedy when temp<=0 (replayable exactly); else seeded top-k/top-p/temp — sealed
+    llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (sc.rep > 1.0f) llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, sc.rep, 0.0f, 0.0f));
+    if (sc.temp <= 0.0f) llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    else {
+        if (sc.top_k > 0) llama_sampler_chain_add(smpl, llama_sampler_init_top_k(sc.top_k));
+        if (sc.top_p < 1.0f) llama_sampler_chain_add(smpl, llama_sampler_init_top_p(sc.top_p, 1));
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(sc.temp));
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(sc.seed));
+    }
     llama_token toks[128];
     int n = llama_tokenize(vocab, prompt.c_str(), (int) prompt.size(), toks, 128, true, false);
     std::vector<int> in_ids(toks, toks + n), out_ids;
     llama_batch b = llama_batch_get_one(toks, n);
     llama_decode(lctx, b);
     for (int i = 0; i < n_gen; i++) {
-        const float * lg = llama_get_logits_ith(lctx, -1);
-        int nv = llama_vocab_n_tokens(vocab), best = 0;
-        for (int t = 1; t < nv; t++) if (lg[t] > lg[best]) best = t;
+        llama_token best = llama_sampler_sample(smpl, lctx, -1);
+        if (llama_vocab_is_eog(vocab, best)) break;
         char piece[64];
         int pn = llama_token_to_piece(vocab, best, piece, sizeof piece, 0, false);
         fwrite(piece, 1, pn > 0 ? pn : 0, stdout); fflush(stdout);
@@ -277,6 +289,7 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen) {
         llama_batch nb = llama_batch_get_one(&best, 1);
         llama_decode(lctx, nb);
     }
+    llama_sampler_free(smpl);
     printf("\n");
 
     // seal: real bytes only — model = verified blob address, engine = b3(this binary),
@@ -284,7 +297,10 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen) {
     double t_seal0 = ms();
     std::ostringstream rj;
     rj << "{\n  \"v\": 1,\n  \"model_b3\": \"" << r.b3 << "\",\n  \"engine_b3\": \"" << engine_b3()
-       << "\",\n  \"decode\": \"greedy\",\n  \"n_ctx\": " << cp.n_ctx
+       << "\",\n  \"decode\": \"" << (sc.temp <= 0.0f ? "greedy" : "sampled")
+       << "\",\n  \"temp\": " << sc.temp << ",\n  \"top_k\": " << sc.top_k
+       << ",\n  \"top_p\": " << sc.top_p << ",\n  \"rep\": " << sc.rep
+       << ",\n  \"seed\": " << sc.seed << ",\n  \"n_ctx\": " << cp.n_ctx
        << ",\n  \"prompt\": \"" << prompt << "\",\n  \"input_ids\": " << ids_json(in_ids)
        << ",\n  \"output_ids\": " << ids_json(out_ids) << "\n}\n";
     std::string rjson = rj.str();
@@ -370,6 +386,39 @@ int main(int argc, char ** argv) {
     ensure_dirs();
     if (argc < 2) { fprintf(stderr, "usage: holo pull|run|ls <ref> [--prompt T] [-n N]\n"); return 2; }
     std::string cmd = argv[1];
+    // llama.cpp compatibility skin: `holo -m model.gguf -p "..." -n 32 ...` (also any argv
+    // from a llama-cli/llama-completion invocation with only the binary name changed).
+    if (cmd.size() && cmd[0] == '-') {
+        std::string mref, prompt = "", pfile;
+        int n_gen = 128; sample_cfg sc; bool escape = false;
+        for (int i = 1; i < argc; i++) {
+            std::string a = argv[i];
+            auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
+            if      (a == "-m" || a == "--model")   mref = next();
+            else if (a == "-p" || a == "--prompt")  prompt = next();
+            else if (a == "-f" || a == "--file")    pfile = next();
+            else if (a == "-n" || a == "--n-predict" || a == "--predict") n_gen = atoi(next().c_str());
+            else if (a == "-c" || a == "--ctx-size") sc.n_ctx = atoi(next().c_str());
+            else if (a == "-t" || a == "--threads")  sc.n_threads = atoi(next().c_str());
+            else if (a == "-s" || a == "--seed")     sc.seed = (uint32_t) atoll(next().c_str());
+            else if (a == "--temp")                  sc.temp = (float) atof(next().c_str());
+            else if (a == "--top-k")                 sc.top_k = atoi(next().c_str());
+            else if (a == "--top-p")                 sc.top_p = (float) atof(next().c_str());
+            else if (a == "--repeat-penalty")        sc.rep = (float) atof(next().c_str());
+            else if (a == "-ngl" || a == "--n-gpu-layers") { next(); fprintf(stderr, "note: %s ignored (CPU build)\n", a.c_str()); }
+            else if (a == "-e" || a == "--escape")   escape = true;
+            else if (a == "-no-cnv" || a == "--no-conversation" || a == "-cnv" || a == "--color" || a == "-i" || a == "--interactive") { /* accepted */ }
+            else fprintf(stderr, "note: flag %s ignored\n", a.c_str());
+        }
+        if (mref.empty()) { fprintf(stderr, "holo: -m <model> required\n"); return 2; }
+        if (!pfile.empty()) prompt = slurp(pfile);
+        if (escape) { std::string t; for (size_t k = 0; k < prompt.size(); k++) { if (prompt[k] == '\\' && k + 1 < prompt.size() && prompt[k+1] == 'n') { t += '\n'; k++; } else t += prompt[k]; } prompt = t; }
+        try {
+            resolved r = resolve(mref);
+            fprintf(stderr, "holo:b3:%s\n", r.b3.c_str());
+            return cmd_run(r, prompt, n_gen, sc);
+        } catch (const std::exception & e) { fprintf(stderr, "holo: %s\n", e.what()); return 1; }
+    }
     try {
         if (cmd == "ls") {
             std::string out = run_capture("cmd /c dir /b \"" + store_root() + "\\refs\" 2>nul");
@@ -387,7 +436,7 @@ int main(int argc, char ** argv) {
         if (cmd == "verify") return cmd_verify(ref);
         resolved r = resolve(ref);
         printf("holo:b3:%s\n", r.b3.c_str());
-        if (cmd == "run") return cmd_run(r, prompt, n_gen);
+        if (cmd == "run") return cmd_run(r, prompt, n_gen, {});
         return 0;
     } catch (const std::exception & e) {
         fprintf(stderr, "holo: %s\n", e.what());

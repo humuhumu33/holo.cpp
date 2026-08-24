@@ -1,0 +1,10 @@
+holo.cpp — fast, verifiable inference of content-addressed models
+=================================================================
+
+  holo pull hf:owner/repo/model.gguf     acquire + verify; prints holo:b3:<address>
+  holo run  <address|alias|file>         verified load + generate + sealed receipt
+  holo verify <receipt-address>          re-derive; byte-identical or loud failure
+  holo-server <ref> --port 8000          OpenAI-compatible API (x-holo-receipt header)
+  holo-cli -m model.gguf -p "..." -n 32  llama.cpp-compatible flags
+
+Store: %USERPROFILE%\.hologram   Engine: qvac-fabric-llm.cpp (llama.cpp fork), MIT.
