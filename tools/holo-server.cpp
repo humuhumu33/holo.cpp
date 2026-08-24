@@ -221,6 +221,22 @@ int main(int argc, char ** argv) {
         json body;
         try { body = json::parse(req.body); }
         catch (...) { res.status = 400; res.set_content("{\"error\":{\"message\":\"invalid JSON\"}}", "application/json"); return; }
+        // honor the requested model: this server holds exactly one verified model, so a request that
+        // names a DIFFERENT one must fail loudly (400) rather than be silently answered by the
+        // resident model — a silent substitution is exactly what a verifiable engine must never do.
+        {
+            std::string want = body.value("model", std::string());
+            std::string have_alias = E.alias, have_b3 = E.model_b3;
+            if (!want.empty() && want != have_alias && want != have_b3 &&
+                want != have_b3.substr(0, 16) && ("holo:b3:" + have_b3) != want) {
+                res.status = 400;
+                res.set_content("{\"error\":{\"message\":\"this server serves model '" +
+                    (have_alias.empty() ? have_b3 : have_alias) +
+                    "'; requested '" + want + "' is not loaded\",\"type\":\"model_not_found\"}}",
+                    "application/json");
+                return;
+            }
+        }
         std::string prompt = chat ? build_prompt(body.value("messages", json::array()))
                                   : body.value("prompt", std::string());
         int   max_tokens = body.value("max_tokens", 128);

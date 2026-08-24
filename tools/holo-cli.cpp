@@ -292,7 +292,26 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
     // buffer rather than copying, so an early free is a use-after-free on first decode.
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    llama_context_params cp = llama_context_default_params(); cp.n_ctx = sc.n_ctx > 0 ? sc.n_ctx : 512;
+
+    // tokenize into a right-sized buffer. llama_tokenize returns a NEGATIVE value (-required)
+    // when the output buffer is too small; the old fixed 128-token stack buffer let that
+    // negative n flow into std::vector(toks, toks+n), whose (last<first) range computed a
+    // ~SIZE_MAX length → "cannot create std::vector larger than max_size()" on any prompt
+    // over ~128 tokens. Size to the prompt, then re-try on the (rare) undercount.
+    std::vector<llama_token> toks((size_t) prompt.size() + 16);
+    int n = llama_tokenize(vocab, prompt.c_str(), (int) prompt.size(), toks.data(), (int) toks.size(), true, false);
+    if (n < 0) { toks.resize((size_t) -n); n = llama_tokenize(vocab, prompt.c_str(), (int) prompt.size(), toks.data(), (int) toks.size(), true, false); }
+    if (n < 0) throw std::runtime_error("tokenization failed");
+    toks.resize(n);
+
+    // context must fit prompt + generation. n_ctx only bounds the KV cache; it does not change
+    // the logits over a fixed causal sequence, so growing it to fit is output-preserving and
+    // keeps greedy replay byte-identical. Never shrink below the 512 default (keeps short-prompt
+    // receipts byte-reproducible against existing golden values).
+    llama_context_params cp = llama_context_default_params();
+    int want_ctx = sc.n_ctx > 0 ? sc.n_ctx : 512;
+    int need_ctx = n + n_gen + 8;
+    cp.n_ctx = want_ctx >= need_ctx ? want_ctx : need_ctx;
     if (sc.n_threads > 0) { cp.n_threads = sc.n_threads; cp.n_threads_batch = sc.n_threads; }
     llama_context * lctx = llama_init_from_model(model, cp);
     // sampler chain: greedy when temp<=0 (replayable exactly); else seeded top-k/top-p/temp — sealed
@@ -305,10 +324,8 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
         llama_sampler_chain_add(smpl, llama_sampler_init_temp(sc.temp));
         llama_sampler_chain_add(smpl, llama_sampler_init_dist(sc.seed));
     }
-    llama_token toks[128];
-    int n = llama_tokenize(vocab, prompt.c_str(), (int) prompt.size(), toks, 128, true, false);
-    std::vector<int> in_ids(toks, toks + n), out_ids;
-    llama_batch b = llama_batch_get_one(toks, n);
+    std::vector<int> in_ids(toks.begin(), toks.end()), out_ids;
+    llama_batch b = llama_batch_get_one(toks.data(), n);
     llama_decode(lctx, b);
     fprintf(stderr, "[%8.1fms] prompt evaluated (%d tokens)\n", ms(), n);
     bool first = true;
@@ -348,7 +365,7 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
 }
 
 // ── verify: re-derive the sealed answer; byte-identical output ids or loud failure ──
-static int cmd_verify(const std::string & ref) {
+static int cmd_verify(const std::string & ref, bool allow_engine_mismatch = false) {
     std::string hex = ref;
     if (hex.rfind("holo:b3:", 0) == 0) hex = hex.substr(8);
     std::string rpath = store_root() + "/receipts/" + hex + ".json";
@@ -364,8 +381,19 @@ static int cmd_verify(const std::string & ref) {
     std::string model_b3 = str_field(j, "model_b3"), eng = str_field(j, "engine_b3");
     std::vector<int> in_ids = parse_ids(j, "input_ids"), want = parse_ids(j, "output_ids");
     if (model_b3.empty() || in_ids.empty()) throw std::runtime_error("malformed receipt");
-    if (eng != engine_b3())
-        fprintf(stderr, "note: engine differs from the sealing engine — replay may legitimately diverge\n");
+    // engine binding is ENFORCED: a receipt names the exact engine binary that produced it, and a
+    // byte-identical replay is only meaningful on that same binary. A different (or zeroed) engine
+    // hash is refused by default; --allow-engine-mismatch is the explicit escape hatch for the
+    // legitimate cross-binary case (e.g. verifying a holo-server-sealed receipt with holo-cli).
+    if (eng != engine_b3()) {
+        if (!allow_engine_mismatch) {
+            fprintf(stderr, "REFUSED: engine binding mismatch — receipt sealed by engine b3:%.16s…, "
+                            "this binary is b3:%.16s…\n", eng.c_str(), engine_b3().c_str());
+            fprintf(stderr, "  (re-verify on the sealing engine, or pass --allow-engine-mismatch to replay anyway)\n");
+            return 1;
+        }
+        fprintf(stderr, "note: engine differs from the sealing engine (--allow-engine-mismatch) — replay may legitimately diverge\n");
+    }
 
     resolved r = resolve("holo:b3:" + model_b3);
     holo::manifest m = holo::manifest::parse_file(store_root() + "/manifests/" + model_b3 + ".json");
@@ -389,9 +417,14 @@ static int cmd_verify(const std::string & ref) {
     if (!model) { fprintf(stderr, "REFUSED: model failed verification — cannot replay\n"); return 1; }
 
 
+    // replay with the sealed n_ctx, grown if needed to fit the sealed sequence. Using the sealed
+    // value (not a hardcoded 512) is what lets long-prompt receipts replay at all; the max() guard
+    // means an under-sized sealed value can never truncate the replay sequence.
     llama_context_params cp = llama_context_default_params();
     std::string nctx = str_field(j, "n_ctx");
-    cp.n_ctx = 512;
+    long sealed_ctx = nctx.empty() ? 512 : atol(nctx.c_str());
+    long need_ctx = (long) in_ids.size() + (long) want.size() + 8;
+    cp.n_ctx = (int) (sealed_ctx >= need_ctx ? sealed_ctx : need_ctx);
     llama_context * lctx = llama_init_from_model(model, cp);
     std::vector<llama_token> toks(in_ids.begin(), in_ids.end());
     llama_batch b = llama_batch_get_one(toks.data(), (int) toks.size());
@@ -416,6 +449,28 @@ static int cmd_verify(const std::string & ref) {
 
 int main(int argc, char ** argv) {
     T0 = clk::now();
+#ifdef _WIN32
+    // Windows hands main() argv in the process ANSI codepage, which mangles any non-ASCII prompt
+    // (café → caf?) so the tokenizer sees different bytes than the engine and greedy replay
+    // diverges. Rebuild argv from the wide command line, decoded as UTF-8, so prompt bytes are
+    // codepage-independent and identical to what a UTF-8 shell would pass on Linux/macOS.
+    {
+        int wargc = 0; wchar_t ** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+        if (wargv && wargc == argc) {
+            static std::vector<std::string> keep(argc);
+            static std::vector<char *> u8(argc + 1, nullptr);
+            for (int i = 0; i < argc; i++) {
+                int need = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, nullptr, 0, nullptr, nullptr);
+                keep[i].resize(need > 0 ? need - 1 : 0);
+                if (need > 1) WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, &keep[i][0], need, nullptr, nullptr);
+                u8[i] = &keep[i][0];
+            }
+            argv = u8.data();
+        }
+        if (wargv) LocalFree(wargv);
+        SetConsoleOutputCP(CP_UTF8);   // so echoed pieces render as UTF-8, matching the sealed bytes
+    }
+#endif
     ensure_dirs();
     if (argc < 2) { fprintf(stderr, "usage: holo pull|run|ls <ref> [--prompt T] [-n N]\n"); return 2; }
     std::string cmd = argv[1];
@@ -460,13 +515,14 @@ int main(int argc, char ** argv) {
         }
         if (argc < 3) { fprintf(stderr, "usage: holo %s <ref>\n", cmd.c_str()); return 2; }
         std::string ref = argv[2], prompt = "The capital of Japan is";
-        int n_gen = 8;
+        int n_gen = 8; bool allow_engine_mismatch = false;
         for (int i = 3; i < argc; i++) {
             std::string a = argv[i];
             if (a == "--prompt") prompt = argv[++i];
             else if (a == "-n") n_gen = atoi(argv[++i]);
+            else if (a == "--allow-engine-mismatch") allow_engine_mismatch = true;
         }
-        if (cmd == "verify") return cmd_verify(ref);
+        if (cmd == "verify") return cmd_verify(ref, allow_engine_mismatch);
         resolved r = resolve(ref);
         printf("holo:b3:%s\n", r.b3.c_str());
         if (cmd == "run") return cmd_run(r, prompt, n_gen, {});

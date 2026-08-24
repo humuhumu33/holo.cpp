@@ -47,16 +47,17 @@ holo content address : holo:b3:5da836c9…  (trust in nothing but the file)
 [holo]  block 47/93 FAILED verification (expected b3:66db5a54…, got b3:f61e8f4a…) — refused, 0 tokens
 ```
 
-**Trustless and paid inference.** Pay a peer to run your prompt; the answer comes with a
-receipt binding model, engine and every token. A genuine answer re-derives byte for byte; a
-fabricated one is caught at the token it was faked:
+**Delegated inference you can audit.** When a prompt runs on a node you didn't build — a
+shared cluster, a vendor endpoint, another team's box inside your boundary — the answer comes
+with a receipt binding model, engine and every token. A genuine answer re-derives byte for
+byte; a substituted or fabricated one is caught at the exact token it diverged:
 
 ```
-✔ VERIFIED: re-derived byte-identical — the peer really ran this model on your prompt
-✘ REFUSED: re-derivation diverged at output position 1 — the cheat, located exactly
+✔ VERIFIED: re-derived byte-identical — this model really produced this answer to this prompt
+✘ REFUSED: re-derivation diverged at output position 1 — the substitution, located exactly
 ```
 
-That last line is the difference between suspicion and slashing evidence. Full walkthroughs:
+That last line is the difference between suspicion and proof. Full walkthroughs:
 [docs/USE-CASES.md](docs/USE-CASES.md).
 
 ## How it works
@@ -69,8 +70,9 @@ Three ideas, each simple:
    Checking overlaps the download, so streaming from a URL it costs nothing.
 3. **Every answer is sealed and replayable.** The receipt binds model address, engine binary
    hash, exact input and output tokens, sampler and seed. `holo verify` re-runs the compute
-   and matches token for token or names the first divergence. A forgery is refuted by
-   compute, not paperwork.
+   and matches token for token or names the first divergence. The engine binding is enforced:
+   a receipt sealed by a different binary is refused unless you pass `--allow-engine-mismatch`.
+   A forgery is refuted by compute, not paperwork.
 
 ## How it compares
 

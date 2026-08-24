@@ -24,6 +24,16 @@ using clk = std::chrono::steady_clock;
 static clk::time_point T0;
 static double ms() { return std::chrono::duration<double, std::milli>(clk::now() - T0).count(); }
 
+// A dead/exhausted origin makes the engine's loader fail mid-stream and tear down its worker
+// threads, which surfaces as "terminate called without an active exception" from inside C frames
+// we do not patch. During the load window, treat that as the clean refusal it is: flush and exit
+// rc=1 (not the default abort's rc=127), matching holo-cli's behavior.
+static volatile bool g_loading = false;
+static void holo_terminate() {
+    if (g_loading) { std::fprintf(stderr, "[holo] REFUSED: origin failed during verified load\n"); std::fflush(nullptr); _Exit(1); }
+    std::abort();
+}
+
 int main(int argc, char ** argv) {
     std::string manifest_path, tensors_path, prompt = "The capital of Japan is";
     std::vector<std::string> origins;
@@ -45,11 +55,14 @@ int main(int argc, char ** argv) {
     }
 
     T0 = clk::now();
+    std::set_terminate(holo_terminate);
+    try {
     holo::manifest m = holo::manifest::parse_file(manifest_path);
     fprintf(stderr, "[%8.1fms] resolved  holo:b3:%.16s…  (%zu bytes, %zu blocks)\n", ms(), m.b3.c_str(), m.size, m.blocks.size());
 
     holo::verified_buffer vb(m.size);
     holo::fetcher         fx(m, vb, origins, throttle);
+    g_loading = true;
     fx.start();
 
     llama_backend_init();
@@ -79,6 +92,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "[%8.1fms] REFUSED: %s\n", ms(), "model not loaded (see error above)");
         return 1;
     }
+    g_loading = false;
     fprintf(stderr, "[%8.1fms] load OK — verified %zu/%zu bytes before serving\n", t_load, vb.verified.load(), m.size);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -108,4 +122,11 @@ int main(int argc, char ** argv) {
     llama_model_free(model);
     llama_backend_free();
     return 0;
+    // a dead/exhausted origin surfaces as a thrown runtime_error from the stream; catch it here so
+    // holo-run exits cleanly rc=1 with the message, matching the mid-stream refusal path, instead
+    // of unwinding to std::terminate (rc=127).
+    } catch (const std::exception & e) {
+        fprintf(stderr, "[%8.1fms] REFUSED: %s\n", ms(), e.what());
+        return 1;
+    }
 }
