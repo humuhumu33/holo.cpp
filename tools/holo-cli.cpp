@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <direct.h>
 #include <windows.h>
+#include <io.h>
 #include <fstream>
 #include <sstream>
 #include <functional>
@@ -243,6 +244,21 @@ static void holo_terminate() {
     std::abort();
 }
 
+// One-shot CLI exit that drains stdout/stderr to their real sinks (a pipe or file) and then
+// leaves via ExitProcess, bypassing the engine's static/thread-pool destructors — which
+// intermittently segfault on MinGW. Unlike _Exit, this waits for buffered piped output to
+// flush first (a bare _Exit can truncate a redirected stdout mid-drain).
+static int holo_clean_exit(int code) {
+    std::fflush(stdout);
+    std::fflush(stderr);
+#ifdef _WIN32
+    // give the CRT's write-back a beat to reach a pipe reader, then hard-exit
+    _commit(_fileno(stdout));
+#endif
+    ExitProcess((UINT) code);
+    return code;   // unreachable
+}
+
 static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, const sample_cfg & sc = {}) {
     std::string root = store_root();
     holo::manifest m = holo::manifest::parse_file(root + "/manifests/" + r.b3 + ".json");
@@ -272,7 +288,8 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
     if (!model) { fprintf(stderr, "REFUSED: model not loaded (verification failed: %s)\n", vb.error.empty() ? "bad model" : vb.error.c_str()); return 1; }
     g_loading = false;
     fprintf(stderr, "[%8.1fms] load OK — %zu/%zu bytes verified\n", ms(), vb.verified.load(), m.size);
-    { std::vector<uint8_t>().swap(vb.data); }   // weights are engine-resident now — drop the 835MB staging buffer
+    // NOTE: do NOT free vb.data here — some archs (llama q6_K CPU path) alias the streamed
+    // buffer rather than copying, so an early free is a use-after-free on first decode.
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
     llama_context_params cp = llama_context_default_params(); cp.n_ctx = sc.n_ctx > 0 ? sc.n_ctx : 512;
@@ -327,8 +344,7 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
     fprintf(stderr, "[%8.1fms] done — %d tokens\n", ms(), n_gen);
     fprintf(stderr, "⟡ sealed  holo:b3:%.16s…   (seal cost %.2f ms)\n", rb3.c_str(), seal_cost);
     fprintf(stderr, "  verify:  holo verify %s\n", rb3.c_str());
-    llama_free(lctx); llama_model_free(model); llama_backend_free();
-    return 0;
+    return holo_clean_exit(0);   // flush, then skip the engine's crashy static teardown
 }
 
 // ── verify: re-derive the sealed answer; byte-identical output ids or loud failure ──
@@ -371,7 +387,7 @@ static int cmd_verify(const std::string & ref) {
     llama_model * model = llama_model_load_from_split_futures(paths, 1, ctx_tag, tpath.c_str(), mp);
     fulfiller.join(); fx.join();
     if (!model) { fprintf(stderr, "REFUSED: model failed verification — cannot replay\n"); return 1; }
-    { std::vector<uint8_t>().swap(vb.data); }   // drop the staging buffer before replay
+
 
     llama_context_params cp = llama_context_default_params();
     std::string nctx = str_field(j, "n_ctx");
@@ -395,8 +411,7 @@ static int cmd_verify(const std::string & ref) {
         llama_decode(lctx, nb);
     }
     printf("VERIFIED: re-derived byte-identical — %zu output tokens match holo:b3:%.16s…\n", want.size(), hex.c_str());
-    llama_free(lctx); llama_model_free(model); llama_backend_free();
-    return 0;
+    return holo_clean_exit(0);
 }
 
 int main(int argc, char ** argv) {

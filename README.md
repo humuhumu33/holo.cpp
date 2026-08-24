@@ -65,6 +65,20 @@ methodology in [docs/DEMO.md](docs/DEMO.md).
 
 Whole demo: 15 seconds on a warm store.
 
+## Practical use cases
+
+`bash demo-usecases.sh` tells three stories on the exact Llama 3.2 model that
+[QVAC](https://github.com/tetherto/qvac) (Tether's local AI SDK) ships in its quickstart:
+
+1. **Supply chain.** The bytes we pull from Hugging Face match, independently, the sha256
+   QVAC pinned in its registry. Two naming systems, one file, agreement you can check.
+2. **Silent corruption.** Flip one bit in the model cache: the usual engine runs it and says
+   nothing, holo refuses by block name before the first token.
+3. **Trustless inference.** A peer runs your prompt and returns a receipt; a genuine answer
+   re-derives byte for byte, a fabricated one is caught at the exact token.
+
+Full transcript and the use cases behind each: [docs/USE-CASES.md](docs/USE-CASES.md).
+
 ## The numbers
 
 Measured 2026-08-24 on an AMD Ryzen AI Max 390 (12 cores, 32 GB, Windows 11), CPU backend,
