@@ -233,6 +233,16 @@ static resolved resolve(const std::string & ref) {
 // ── run ─────────────────────────────────────────────────────────────────────────
 struct sample_cfg { float temp = 0.0f; int top_k = 40; float top_p = 1.0f; float rep = 1.0f; uint32_t seed = 0; int n_threads = 0; int n_ctx = 512; };
 
+// Set true once a verified load is under way. If the engine aborts during its own cleanup
+// after we have already refused a tampered model (a joinable worker thread destructs → the
+// runtime calls terminate), exit cleanly with rc=1 instead of a 0xC0000409 crash. The
+// security property is unaffected — the refusal was already printed and no byte was served.
+static volatile bool g_loading = false;
+static void holo_terminate() {
+    if (g_loading) { std::fflush(nullptr); _Exit(1); }
+    std::abort();
+}
+
 static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, const sample_cfg & sc = {}) {
     std::string root = store_root();
     holo::manifest m = holo::manifest::parse_file(root + "/manifests/" + r.b3 + ".json");
@@ -241,23 +251,26 @@ static int cmd_run(const resolved & r, const std::string & prompt, int n_gen, co
 
     holo::verified_buffer vb(m.size);           // verify-on-read: warm bytes re-checked block-wise
     holo::fetcher fx(m, vb, r.origins);
+    std::set_terminate(holo_terminate);
+    g_loading = true;
     fx.start();
 
     llama_backend_init();
     const char * ctx_tag = "holo";
     const char * paths[1] = { "holo://model" };
-    std::thread fulfiller([&] {
+    std::thread fulfiller([&] { try {
         auto tb = std::make_unique<std::filebuf>();
         tb->open(tpath, std::ios::in | std::ios::binary);
         llama_model_load_fulfill_split_future(tpath.c_str(), ctx_tag, std::unique_ptr<std::streambuf>(std::move(tb)));
         llama_model_load_fulfill_split_future("holo://model", ctx_tag,
                                               std::unique_ptr<std::streambuf>(std::make_unique<holo::stream_buf>(vb)));
-    });
+    } catch (const std::exception & e) { fprintf(stderr, "[holo] fulfil aborted: %s\n", e.what()); } catch (...) { fprintf(stderr, "[holo] fulfil aborted\n"); } });
     llama_model_params mp = llama_model_default_params();
     mp.use_mmap = false;
     llama_model * model = llama_model_load_from_split_futures(paths, 1, ctx_tag, tpath.c_str(), mp);
     fulfiller.join(); fx.join();
-    if (!model) { fprintf(stderr, "REFUSED: model not loaded\n"); return 1; }
+    if (!model) { fprintf(stderr, "REFUSED: model not loaded (verification failed: %s)\n", vb.error.empty() ? "bad model" : vb.error.c_str()); return 1; }
+    g_loading = false;
     fprintf(stderr, "[%8.1fms] load OK — %zu/%zu bytes verified\n", ms(), vb.verified.load(), m.size);
     { std::vector<uint8_t>().swap(vb.data); }   // weights are engine-resident now — drop the 835MB staging buffer
 
@@ -347,13 +360,13 @@ static int cmd_verify(const std::string & ref) {
     const char * ctx_tag = "holo-verify";
     const char * paths[1] = { "holo://model" };
     std::string tpath = store_root() + "/tensors/" + model_b3 + ".txt";
-    std::thread fulfiller([&] {
+    std::thread fulfiller([&] { try {
         auto tb = std::make_unique<std::filebuf>();
         tb->open(tpath, std::ios::in | std::ios::binary);
         llama_model_load_fulfill_split_future(tpath.c_str(), ctx_tag, std::unique_ptr<std::streambuf>(std::move(tb)));
         llama_model_load_fulfill_split_future("holo://model", ctx_tag,
                                               std::unique_ptr<std::streambuf>(std::make_unique<holo::stream_buf>(vb)));
-    });
+    } catch (const std::exception & e) { fprintf(stderr, "[holo] fulfil aborted: %s\n", e.what()); } catch (...) { fprintf(stderr, "[holo] fulfil aborted\n"); } });
     llama_model_params mp = llama_model_default_params(); mp.use_mmap = false;
     llama_model * model = llama_model_load_from_split_futures(paths, 1, ctx_tag, tpath.c_str(), mp);
     fulfiller.join(); fx.join();

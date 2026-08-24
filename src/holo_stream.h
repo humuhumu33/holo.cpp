@@ -209,9 +209,13 @@ struct stream_buf : std::streambuf {
 
     explicit stream_buf(verified_buffer & b) : buf(b) { setg(&one, &one, &one); }
 
+    // NEVER throw out of a streambuf: exceptions unwinding through the engine's C frames
+    // abort the process (measured: header-block tamper → 0xC0000409). On a failed stream,
+    // present EOF — the loader then fails its own way, cleanly, after our named refusal
+    // has already been printed by the fetcher.
     std::streamsize xsgetn(char * s, std::streamsize n) override {
         size_t end = std::min(pos + (size_t) n, buf.data.size());
-        if (end > pos) buf.wait_for(end);
+        if (end > pos) { try { buf.wait_for(end); } catch (...) { return 0; } }
         size_t got = end - pos;
         memcpy(s, buf.data.data() + pos, got);
         pos = end;
@@ -219,7 +223,7 @@ struct stream_buf : std::streambuf {
     }
     int underflow() override {
         if (pos >= buf.data.size()) return traits_type::eof();
-        buf.wait_for(pos + 1);
+        try { buf.wait_for(pos + 1); } catch (...) { return traits_type::eof(); }
         one = (char) buf.data[pos++];
         setg(&one, &one, &one + 1);
         return traits_type::to_int_type(one);

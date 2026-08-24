@@ -56,7 +56,7 @@ int main(int argc, char ** argv) {
     const char * ctx_tag = "holo";
     const char * paths[1] = { "holo://model" };
 
-    std::thread fulfiller([&] {
+    std::thread fulfiller([&] { try {
         // tensor list: tiny, read it whole from disk
         {
             auto tb = std::make_unique<std::filebuf>();
@@ -67,7 +67,7 @@ int main(int argc, char ** argv) {
         // model: the verified stream
         llama_model_load_fulfill_split_future("holo://model", ctx_tag,
                                               std::unique_ptr<std::streambuf>(std::make_unique<holo::stream_buf>(vb)));
-    });
+    } catch (const std::exception & e) { fprintf(stderr, "[holo] fulfil aborted: %s\n", e.what()); } catch (...) { fprintf(stderr, "[holo] fulfil aborted\n"); } });
 
     llama_model_params mp = llama_model_default_params();
     mp.use_mmap = false;

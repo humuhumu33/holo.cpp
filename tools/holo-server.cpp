@@ -76,13 +76,13 @@ static void load_model(const std::string & b3) {
     const char * ctx_tag = "holo-server";
     const char * paths[1] = { "holo://model" };
     std::string tpath = root + "/tensors/" + b3 + ".txt";
-    std::thread ff([&] {
+    std::thread ff([&] { try {
         auto tb = std::make_unique<std::filebuf>();
         tb->open(tpath, std::ios::in | std::ios::binary);
         llama_model_load_fulfill_split_future(tpath.c_str(), ctx_tag, std::unique_ptr<std::streambuf>(std::move(tb)));
         llama_model_load_fulfill_split_future("holo://model", ctx_tag,
                                               std::unique_ptr<std::streambuf>(std::make_unique<holo::stream_buf>(vb)));
-    });
+    } catch (const std::exception & e) { fprintf(stderr, "[holo] fulfil aborted: %s\n", e.what()); } catch (...) { fprintf(stderr, "[holo] fulfil aborted\n"); } });
     llama_model_params mp = llama_model_default_params(); mp.use_mmap = false;
     E.model = llama_model_load_from_split_futures(paths, 1, ctx_tag, tpath.c_str(), mp);
     ff.join(); fx.join();

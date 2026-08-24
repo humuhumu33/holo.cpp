@@ -1,0 +1,41 @@
+## stress run 2026-08-24T12:05Z — CPU only, engine 4919828, model bitnet_b1_58-xl-TQ2_0 (b3:3e82b1eb…)
+== S1 parity gate
+S1 parity(60-char window): DIFFER  a='Tokyo, the largest city in the count' b='Tokyo, the largest city in the country. Tokyo is a'
+S1 parity FULL: IDENTICAL
+  text: 'Tokyo, the largest city in the country. Tokyo is a city of 12 million people, and it is the center o'
+== S2 tamper matrix (bit flips at 5 positions in the stored blob)
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=3221226505 wall_ms=563.0 out=''
+ERR [     1.0ms] resolved  holo:b3:3e82b1eb8514518c…  (834553152 bytes, warm) | [holo] block 0/100 FAILED verification (expected b3:d0065ae332927945…, got b3:a020724232ac6198…) — refusing to serve it | terminate called without an active exception | 
+tamper@0: RESULT rc=3221226505 wall_ms=563.0 out=''
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=3221226505 wall_ms=218.0 out=''
+ERR [     0.8ms] resolved  holo:b3:3e82b1eb8514518c…  (834553152 bytes, warm) | [holo] block 0/100 FAILED verification (expected b3:d0065ae332927945…, got b3:b7cb602a0eacbdbf…) — refusing to serve it | terminate called without an active exception | 
+tamper@100: RESULT rc=3221226505 wall_ms=218.0 out=''
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=1 wall_ms=703.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+ERR FAILED verification (expected b3:81cf3d3de1c7cb48…, got b3:a1a78e4ea5a95368…) — refusing to serve it | [DEBUG] ~llama_model: ctxs_bufs.size()=1 | llama_model_load: error loading model: holo stream failed: block 49/100 FAILED verification (expected b3:81cf3d3de1c7cb48…, got b3:a1a78e4ea5a95368…) — refusing to serve it | llama_model_load_from_file_impl: failed to load model | REFUSED: model not loaded | 
+tamper@417276576: RESULT rc=1 wall_ms=703.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=1 wall_ms=1000.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+ERR FAILED verification (expected b3:2272b9f0a5546de0…, got b3:4e9ac8a34ffb2b5d…) — refusing to serve it | [DEBUG] ~llama_model: ctxs_bufs.size()=1 | llama_model_load: error loading model: holo stream failed: block 83/100 FAILED verification (expected b3:2272b9f0a5546de0…, got b3:4e9ac8a34ffb2b5d…) — refusing to serve it | llama_model_load_from_file_impl: failed to load model | REFUSED: model not loaded | 
+tamper@700000000: RESULT rc=1 wall_ms=1000.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=1 wall_ms=1547.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+ERR FAILED verification (expected b3:9bb7c37d789817e0…, got b3:f1c476d1d72ae53b…) — refusing to serve it | [DEBUG] ~llama_model: ctxs_bufs.size()=1 | llama_model_load: error loading model: holo stream failed: block 99/100 FAILED verification (expected b3:9bb7c37d789817e0…, got b3:f1c476d1d72ae53b…) — refusing to serve it | llama_model_load_from_file_impl: failed to load model | REFUSED: model not loaded | 
+tamper@834553151: RESULT rc=1 wall_ms=1547.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=3221226505 wall_ms=469.0 out=''
+ERR [     0.8ms] resolved  holo:b3:3e82b1eb8514518c…  (834553152 bytes, warm) | [holo] block 0/100 FAILED verification (expected b3:d0065ae332927945…, got b3:a020724232ac6198…) — refusing to serve it | gguf_init_from_reader: failed to read magic | terminate called without an active exception | 
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=0 wall_ms=1203.0 load=929.5 prompt=1012.7 first=1012.9 done=1146.5 seal=13.71 ntok=4.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=3221226505 wall_ms=234.0 out=''
+ERR [     1.1ms] resolved  holo:b3:3e82b1eb8514518c…  (834553152 bytes, warm) | [holo] block 0/100 FAILED verification (expected b3:d0065ae332927945…, got b3:a020724232ac6198…) — refusing to serve it | gguf_init_from_reader: failed to read magic | terminate called without an active exception | 
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=0 wall_ms=1453.0 load=1078.5 prompt=1191.7 first=1191.9 done=1387.3 seal=17.43 ntok=4.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=3221226505 wall_ms=562.0 out=''
+ERR [     0.8ms] resolved  holo:b3:3e82b1eb8514518c…  (834553152 bytes, warm) | [holo] block 0/100 FAILED verification (expected b3:d0065ae332927945…, got b3:a020724232ac6198…) — refusing to serve it | gguf_init_from_reader: failed to read magic | terminate called without an active exception | 
+CMD ./holo.exe run bitnet-xl -n 4
+RESULT rc=0 wall_ms=1813.0 load=1330.6 prompt=1499.0 first=1499.5 done=1707.6 seal=27.21 ntok=4.0 out='holo:b3:3e82b1eb8514518cee82a37764b26247d3b60eda4f92954ef7ac'
