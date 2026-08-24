@@ -1,0 +1,33 @@
+{
+  "date": "2026-08-24",
+  "machine": "AMD Ryzen AI Max 390 (Zen 5 12C/24T, 32GB), Windows 11, MinGW g++ 15.2.0, CPU backend only",
+  "engine": { "repo": "tetherto/qvac-fabric-llm.cpp", "commit": "4919828", "build": "Release, -march=native, OpenMP" },
+  "model": {
+    "file": "bitnet_b1_58-xl-TQ2_0.gguf", "bytes": 834553152,
+    "source": "gianni-cor/bitnet_b1_58-xl-TQ2_0",
+    "note": "fallback reference: microsoft 2B-4T ships only i2_s (BitNet.cpp type, no GGML_TYPE_I2_S in this engine); TQ2_0 conversion of 2B-4T is a Phase 0 follow-up via convert_hf_to_gguf.py --outtype tq2_0"
+  },
+  "file_path_baseline": {
+    "tool": "llama-completion",
+    "load_ms": 466.33,
+    "prompt_eval_tok_s": 57.59,
+    "decode_tok_s": 10.78,
+    "output_first_tokens": "The capital of Japan is Tokyo, the largest city in the country."
+  },
+  "futures_probe": {
+    "tool": "tools/probe-futures.cpp",
+    "unthrottled": { "load_returned_ms": 1351.7, "first_decode_ms": 1459.6 },
+    "throttled_50MBps_arrival_model": {
+      "delay_us_per_mb": 20000, "simulated_wire_s": 16.7,
+      "load_returned_ms": 17477.8, "first_decode_ms": 17540.2,
+      "epsilon_after_last_byte_ms": 660
+    },
+    "read_pattern": {
+      "reads": 130188, "fwd_seeks": 387, "back_seeks": 387,
+      "size_probe_pairs": 266,
+      "real_data_seeks": "~121, local, few-MB span, broadly monotonic sweep of tensor data",
+      "verdict": "arrived-prefix store fully covers the access pattern"
+    },
+    "parity": "greedy output identical to file-path baseline for the generated span (' Tokyo, the largest city in the country')"
+  }
+}
