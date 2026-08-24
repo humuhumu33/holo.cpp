@@ -1,3 +1,8 @@
 models/
 *.exe
+*.o
 build/
+bench/tmp/
+dist/holo-win64.zip
+dist/holo-win64/*.dll
+forged.json
