@@ -18,11 +18,14 @@ as a pinned submodule. holo.cpp contributes what no inference engine ships:
   divergence. A forged receipt is refuted by the compute, not the paperwork.
 
 **Measured** (see [bench/RESULTS.md](bench/RESULTS.md); 835 MB BitNet TQ2_0, CPU, matched
-configs, harness in-repo): greedy output **character-identical** to `llama-completion`;
-verification costs **~600 ms of load and zero decode**; and on a controlled 50 MB/s wire the
-verified streaming path reached its first token **sooner** than an unverified
-download-then-load (16.09 s vs 16.37 s). Losses and exclusions are reported in the same
-tables.
+configs, interleaved runs, harness in-repo): greedy output **character-identical** to
+`llama-completion`; decode speed a statistical tie (17.6 vs 16.9 tok/s median, overlapping
+spreads — same kernels, so verification costs **zero per token**); verified load costs
+~560 ms once on 835 MB; a single flipped bit anywhere in the model is refused by name with
+zero tokens emitted (the engine loads the same tampered file without complaint); and on a
+validated 50 MB/s wire the verified streaming path finishes **~0.6 s sooner** than the
+engine's own unverified download-then-load. Ties, losses and exclusions are reported in the
+same tables.
 
 ## Use
 

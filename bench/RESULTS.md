@@ -1,77 +1,124 @@
-# Benchmark results — 2026-08-24
+# Benchmark results — holo.cpp vs qvac-fabric-llm.cpp
 
-**Machine.** AMD Ryzen AI Max 390 (Zen 5, 12C/24T), 32 GB, Windows 11. **CPU backend only**
-(no Vulkan SDK installed; no discrete NVIDIA GPU — no CUDA numbers are possible on this box).
-Engine: `qvac-fabric-llm.cpp` @ `4919828`, Release, `-march=native`, OpenMP.
-Model: `bitnet_b1_58-xl-TQ2_0.gguf` (834,553,152 bytes, BitNet ternary).
+**Date 2026-08-24 · CPU only.** AMD Ryzen AI Max 390 (Zen 5, 12C/24T), 32 GB, Windows 11.
+No Vulkan SDK, no NVIDIA GPU on this box — every number below is the CPU backend
+(`-march=native`, OpenMP). Engine: `qvac-fabric-llm.cpp` @ `4919828`. Model:
+`bitnet_b1_58-xl-TQ2_0.gguf` (834,553,152 B, sha256 `3c32e12dc1eadb8e…`, content address
+`holo:b3:3e82b1eb…`). Harness: `bench/stress.sh` + `bench/run1.py` (zombie-proof tree-kill
+timeouts) + `bench/throttled-server.py`; raw log `bench/stress.raw.txt`. Runs are
+warm-up-discarded, decode runs **interleaved** between engines to cancel thermal drift, and
+every cold-start run **self-validates** (byte count + wire time ≥ 95 % of nominal) or is
+excluded and marked INVALID. The earlier, thinner run of these tables is preserved as
+`RESULTS.v1.md`.
 
-**Comparator.** `llama-completion` from the same build — the **same engine underneath**, so
-every delta is attributable to the holo loader/verifier and nothing else. vLLM is excluded
-from this suite because it cannot load this model at all (no GGUF loader, no ternary path at
-rev `1baf372b`); Ollama is not installed here and cannot ingest a bare GGUF without a
-Modelfile import. Both exclusions stated per the contract; a mainstream-model suite is the
-open item for any vLLM comparison.
+**The comparator is the engine holo itself vendors.** Same kernels underneath — so every
+delta below is attributable to holo's loader and verifier, and decode ties are the expected,
+honest result, not a failure. vLLM is excluded (cannot load this model: no GGUF loader, no
+ternary path at rev `1baf372b`); Ollama is not installed and cannot ingest a bare GGUF
+without a Modelfile import. Both exclusions per the contract.
 
-**Rules followed.** Same box, same model file, same flags where marked, greedy `--temp 0`,
-raw log in `results.raw.txt`, harness in `run-bench.sh` + `throttled-server.py`. Losses are
-reported first.
+## Top line
 
-## Parity (gate for everything below)
+On the same hardware and the same model file, holo.cpp produces **character-identical
+output** to `qvac-fabric-llm.cpp`, decodes at the **same speed** (median 17.6 vs 16.9 tok/s,
+overlapping spreads), and adds what the engine does not have: every load is
+**block-verified** — a single flipped bit anywhere in 835 MB is refused by name with zero
+tokens emitted, while the engine loads the same tampered file without complaint — every
+answer carries a **re-derivable receipt**, and over a 50 MB/s wire the verified streaming
+path finishes **~0.6 s sooner** than the engine's own unverified download-then-load.
+Verification's entire cost is ~0.6 s of load time on a warm 835 MB model — and effectively
+zero when the model arrives over the network, because it rides inside the wire time.
 
-32-token greedy continuation, matched `-c 2048 -t 12`:
-**IDENTICAL, character for character**, between `llama-completion -m file.gguf` and
-`holo-cli -m holo:b3:3e82b1eb…` through the verified stream:
+## Ties first (the honest core)
 
-> "Tokyo, the largest city in the country. Tokyo is a city of 12 million people, and it is
-> the center of the Japanese economy. The city"
+**Output parity (gate).** Greedy 32-token continuation, matched `-c 2048 -t 12`:
+**IDENTICAL, character for character.** This gate precedes and licenses every timing row.
 
-## Warm single-stream, matched config (`-c 2048 -t 12`, n=64, 5 runs)
+**Decode throughput — a tie, as it must be.** n=64 greedy, matched `-c 2048 -t 12`,
+8 interleaved pairs after a discarded warm-up pair:
 
-| engine | decode tok/s (min…max) | median | load, ms |
-|---|---|---:|---:|
-| llama-completion (mmap, no verification) | 13.51 … 19.07 | **16.59** | 257–707 |
-| holo (full BLAKE3 re-verify of all 100 blocks, no mmap) | 13.62 … 17.79 | **16.71** | 826–992 |
+| engine | decode tok/s median | min…max |
+|---|---:|---|
+| holo (block-verified load, no mmap) | **17.6** | 15.5…18.9 |
+| llama-completion (mmap, no verification) | **16.9** | 16.5…19.5 |
 
-**Read this honestly:** decode speed is statistically identical — as it must be, same
-kernels. The run-to-run spread (±20%) is thermal/system noise on a busy desktop and dwarfs
-any engine delta. **What verification actually costs is load-time only: ~600 ms extra on an
-835 MB model** (block re-verify + copy versus mmap). TTFT after load: ~99–144 ms (prompt
-eval + first decode).
+The spreads overlap; the difference is noise. **Verification costs zero per token.**
+Methodology note kept on purpose: an earlier batched (non-interleaved) run showed holo at
+11.4 vs 16.9 — pure thermal/scheduler drift between the two batches; interleaving removed
+it. The invalid run stays in the raw log.
 
-**A loss we found and fixed while measuring:** the first matched run showed holo ~20%
-slower at decode. Cause: the loader kept its 835 MB staging buffer resident through
-generation, fighting the weights for cache. Freeing it after load closed the gap. Recorded
-because the measurement is the reason it was found.
+## Verification (the capability the engine does not have)
 
-## Cold start, controlled 50 MB/s wire (localhost throttled origin, 3 runs each)
+**Tamper matrix.** One bit flipped at five positions in the stored model — first byte
+(GGUF header), byte 100, the midpoint, byte 700,000,000, and the final byte:
 
-| path | ttft_from_url, ms (median) | total, ms | verification |
-|---|---:|---:|---|
-| **holo** — stream + verify in-flight + load overlapped | **16,091** | 16,453–16,500 | **every block, BLAKE3** |
-| download, then load (the `-hf`-style flow) | 16,368 | 16,922–16,968 | **none** |
+```
+tamper@0          rc=1  0 tokens   REFUSED-CLEAN
+tamper@100        rc=1  0 tokens   REFUSED-CLEAN
+tamper@417276576  rc=1  0 tokens   REFUSED-CLEAN
+tamper@700000000  rc=1  0 tokens   REFUSED-CLEAN
+tamper@834553151  rc=1  0 tokens   REFUSED-CLEAN
+```
 
-holo reaches the first token **~280 ms sooner** and the prompt is answered ~470 ms sooner in
-total — **while also verifying every byte**, which the comparator does not do at all. The
-honest framing stands as predicted in Phase 0: at this model size the overlap buys back
-roughly the load time; the structural claim is *verification at zero added wall-time*, not a
-dramatic speed win. The margin grows with model size and load cost, not with link speed.
+Each refusal names the failing block with both hashes
+(`block 0/100 FAILED verification (expected b3:d0065ae3…, got b3:a0207242…)`), exits
+non-zero, and the engine never sees the byte. The same tampered file handed to
+`llama-completion` directly **loads and runs without complaint** — the engine has no
+integrity check. (Hardening found by this harness: header-region tampering originally
+exited via an engine-side abort *after* our refusal printed; fixed in `1ba3389` so all
+positions exit rc=1 cleanly.)
 
-**Real-internet datapoint** (not simulated): 835 MB from huggingface.co at ~6 MB/s —
-ttft_from_url = **139.2 s**, with verification and model build adding ~0.1 s visible over
-the wire time (`docs/PHASE-1.md`).
+**Receipts.** Every run seals `model address ‖ engine-binary hash ‖ input ids ‖ output ids
+‖ sampler+seed`, content-addressed by its own hash. `holo verify` re-derives: a clean
+receipt → `VERIFIED … byte-identical` in **1.2–1.4 s wall** for an 8-token answer
+(≈ load + replay, no per-token surcharge). Prior gates (docs/PHASE-3.md): an edited receipt
+is refused on address mismatch before any compute; a **forged** receipt with a correct
+self-address and one altered output id is refused by re-derivation at the exact divergent
+position. The engine has no equivalent concept.
 
-## Verified replay (3 runs)
+**What verification costs, isolated.** Warm store, matched config, 8 runs each after
+warm-up discard:
 
-`holo verify` on an 8-token receipt: **2,828 / 2,828 / 2,891 ms** wall. That price buys:
-re-verification of all 100 weight blocks, model rebuild, and position-by-position greedy
-replay proven byte-identical. There is no comparator row — no other engine has this
-operation.
+| load path | median ms | min…max |
+|---|---:|---|
+| engine mmap load (no verification) | **307** | 295…334 |
+| holo verified load (all 100 blocks BLAKE3-checked) | **865** | 854…944 |
 
-## What we do NOT claim
+Overhead ≈ **560 ms on 835 MB** (≈ 1.5 GB/s effective verify+copy), paid once per process
+start, never per token.
 
-- No GPU numbers of any kind yet (Vulkan SDK not installed; no CUDA hardware).
-- No serving/concurrency numbers — vLLM's regime, not measured, not claimed.
-- No cross-machine replay demonstration yet (same-machine, fresh-process only).
-- The 2B-4T reference wafer model is not yet in this table — the published `i2_s` GGUF is
-  not loadable by this engine family; a local TQ2_0 conversion is the open item.
-- These numbers are from one busy desktop, dated above, and expire.
+## Latency — cold start from a URL (the differentiator regime)
+
+Controlled 50 MB/s localhost wire, **fresh server per run**, every run validated (full byte
+count, wire ≥ 95 % of nominal) — 4 valid runs per side, zero invalid:
+
+| path | ms to completion, median | min…max | verified? |
+|---|---:|---|---|
+| holo verified stream (load+verify overlap the wire) | **16,375** | 16,328…16,469 | **every block** |
+| engine download → load (serial) | **16,984** | 16,922…17,000 | none |
+
+holo finishes **~610 ms sooner, and verified** — load and verification are absorbed into
+the wire time while the engine pays download then load serially. The margin ≈ the engine's
+own load cost; it grows with model size and shrinks on faster links. Real-internet
+datapoint on record (docs/PHASE-1.md): 835 MB from Hugging Face at ~6 MB/s, all blocks
+verified in-flight, load complete ≈ wire time, first token +96 ms after the last byte.
+
+## Robustness (phase gates, re-confirmed under this harness)
+
+Truncated origin → automatic failover resuming at the verified high-water, identical
+output. Missing redirect support, dead mirror, corrupt manifest → named errors, non-zero
+exits, no hangs. Post-flight after the full suite: no orphaned processes; RAM and disk
+within 0.5 GB of pre-flight.
+
+## What this does NOT show
+
+- **No GPU numbers.** Vulkan/Metal/CUDA legs need hardware/SDKs this box lacks.
+- **No cross-machine replay.** Receipts re-derive in fresh processes on this machine;
+  cross-machine determinism (same binary, different CPU) is designed but undemonstrated.
+- **No serving concurrency.** holo-server serializes inference (single local user by
+  design) and its SSE streaming is batch-flushed in v0.1. No concurrency claims are made.
+- **One model family measured here** (BitNet TQ2_0; stories260K in the phase gates).
+  Architecture coverage is inherited from the engine but not per-arch verified. The 2B-4T
+  reference wafer model remains an open item: its published `i2_s` GGUF is not loadable by
+  this engine family; a local TQ2_0 conversion is the path.
+- **Numbers are dated (2026-08-24) and expire.** Re-run `bench/stress.sh` before quoting.
